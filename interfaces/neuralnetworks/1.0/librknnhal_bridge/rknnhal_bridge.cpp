@@ -1,3 +1,17 @@
+// Copyright (c) 2021 by Rockchip Electronics Co., Ltd. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <rockchip/hardware/neuralnetworks/1.0/IRKNeuralnetworks.h>
 #include <log/log.h>
 #include <iostream>
@@ -46,8 +60,7 @@ static bool g_debug_pro = 0;
 // From rknn api
 int ARKNN_client_create(ARKNNHAL **hal) {
     g_debug_pro = property_get_bool("persist.vendor.rknndebug", false);
-    ALOGE("%s %d", __func__, g_debug_pro);
-
+    
     auto nnb = std::make_unique<RockchipNeuralnetworksBuilder>();
     *hal = reinterpret_cast<ARKNNHAL*>(nnb.release());
     return 0;
@@ -92,5 +105,24 @@ int ARKNN_outputs_get(ARKNNHAL *hal, rknn_context context, uint32_t n_outputs, r
 int ARKNN_outputs_release(ARKNNHAL *hal, rknn_context context, uint32_t n_outputs, rknn_output outputs[]) {
     CHECK_AND_GET_CLIENT();
     int ret = client->rknn_outputs_release(context, n_outputs, outputs);
+    return ret;
+}
+
+int ARKNN_destory_mem(ARKNNHAL *hal, rknn_context context, rknn_tensor_mem *mem) {
+    CHECK_AND_GET_CLIENT();
+    int ret = client->rknn_destory_mem(context, mem);
+    return ret;
+}
+
+rknn_tensor_mem *ARKNN_create_mem(ARKNNHAL *hal, rknn_context context, uint32_t size) {
+    RockchipNeuralnetworksBuilder* client = reinterpret_cast<RockchipNeuralnetworksBuilder*>(hal);
+    rknn_tensor_mem* mem;
+    mem = client->rknn_create_mem(context, size);
+    return mem;
+}
+
+int ARKNN_set_io_mem(ARKNNHAL *hal, rknn_context context, rknn_tensor_mem *mem, rknn_tensor_attr *attr) {
+    CHECK_AND_GET_CLIENT();
+    int ret = client->rknn_set_io_mem(context, mem, attr);
     return ret;
 }

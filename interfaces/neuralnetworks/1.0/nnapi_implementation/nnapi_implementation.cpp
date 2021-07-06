@@ -1,23 +1,23 @@
-/* Copyright 2021 The TensorFlow Authors. All Rights Reserved.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-==============================================================================*/
+// Copyright (c) 2021 by Rockchip Electronics Co., Ltd. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <cstdlib>
 #include <android/log.h>
@@ -28,8 +28,10 @@ limitations under the License.
 #include "rknn_api.h"
 
 #define TAG "RKNN_API"
-// #define NNAPI_LOG(...) __android_log_print(ANDROID_LOG_ERROR,TAG ,__VA_ARGS__)
-#define NNAPI_LOG(...)
+#define NNAPI_LOG(...) __android_log_print(ANDROID_LOG_ERROR,TAG ,__VA_ARGS__)
+// #define NNAPI_LOG(...)
+/* To prevent unused parameter warnings */
+#define UNUSED(x) (void)(x)
 
 struct NnApi {
   bool nnapi_exists;
@@ -43,6 +45,9 @@ struct NnApi {
   int (*ARKNN_run)(ARKNNHAL *hal, rknn_context context, rknn_run_extend* extend);
   int (*ARKNN_outputs_get)(ARKNNHAL *hal, rknn_context, uint32_t n_outputs, rknn_output outputs[], rknn_output_extend* extend);
   int (*ARKNN_outputs_release)(ARKNNHAL *hal, rknn_context context, uint32_t n_ouputs, rknn_output outputs[]);
+  int (*ARKNN_destory_mem)(ARKNNHAL *hal, rknn_context context, rknn_tensor_mem *mem);
+  rknn_tensor_mem * (*ARKNN_create_mem)(ARKNNHAL *hal, rknn_context context, uint32_t size);
+  int (*ARKNN_set_io_mem)(ARKNNHAL *hal, rknn_context context, rknn_tensor_mem *mem, rknn_tensor_attr *attr);
 
   int (*ASharedMemory_create)(const char* name, size_t size);
 };
@@ -133,6 +138,9 @@ static const NnApi LoadNnApi() {
   LOAD_FUNCTION(librknnhal_bridge, ARKNN_run);
   LOAD_FUNCTION(librknnhal_bridge, ARKNN_outputs_get);
   LOAD_FUNCTION(librknnhal_bridge, ARKNN_outputs_release);
+  LOAD_FUNCTION(librknnhal_bridge, ARKNN_destory_mem);
+  LOAD_FUNCTION(librknnhal_bridge, ARKNN_create_mem);
+  LOAD_FUNCTION(librknnhal_bridge, ARKNN_set_io_mem);
 
   /* Not sure this func exist.
    * LOAD_FUNCTION_OPTIONAL(
@@ -173,6 +181,7 @@ typedef struct {
 int rknn_init(rknn_context* context, void* model, uint32_t size, uint32_t flag, rknn_init_extend* extend) {
   int ret;
   const NnApi *_nnapi = NnApiImplementation();
+  UNUSED(extend);
 
   ARKNNHAL *_hal;
   _nnapi->ARKNN_client_create(&_hal);
@@ -196,7 +205,7 @@ int rknn_init(rknn_context* context, void* model, uint32_t size, uint32_t flag, 
 
 int rknn_destroy(rknn_context context) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -209,7 +218,7 @@ int rknn_destroy(rknn_context context) {
 
 int rknn_query(rknn_context context, rknn_query_cmd cmd, void* info, uint32_t size) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -220,7 +229,7 @@ int rknn_query(rknn_context context, rknn_query_cmd cmd, void* info, uint32_t si
 
 int rknn_inputs_set(rknn_context context, uint32_t n_inputs, rknn_input inputs[]) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -231,7 +240,7 @@ int rknn_inputs_set(rknn_context context, uint32_t n_inputs, rknn_input inputs[]
 
 int rknn_run(rknn_context context, rknn_run_extend* extend) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -242,7 +251,7 @@ int rknn_run(rknn_context context, rknn_run_extend* extend) {
 
 int rknn_outputs_get(rknn_context context, uint32_t n_outputs, rknn_output outputs[], rknn_output_extend* extend) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -253,7 +262,7 @@ int rknn_outputs_get(rknn_context context, uint32_t n_outputs, rknn_output outpu
 
 int rknn_outputs_release(rknn_context context, uint32_t n_ouputs, rknn_output outputs[]) {
   _rknn_context *_ctx = (_rknn_context *)context;
-  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == NULL) {
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
     return RKNN_ERR_CTX_INVALID;
   }
 
@@ -263,46 +272,105 @@ int rknn_outputs_release(rknn_context context, uint32_t n_ouputs, rknn_output ou
 }
 
 int rknn_wait(rknn_context context, rknn_run_extend* extend) {
+  UNUSED(context);
+  UNUSED(extend);
+
   NNAPI_LOG("No Implement rknn_wait on Android HIDL RKNN API!");
   return RKNN_ERR_FAIL;
 }
 
 rknn_tensor_mem* rknn_create_mem_from_phys(rknn_context ctx, uint64_t phys_addr, void *virt_addr, uint32_t size) {
+  UNUSED(ctx);
+  UNUSED(phys_addr);
+  UNUSED(virt_addr);
+  UNUSED(size);
+
   NNAPI_LOG("No Implement rknn_create_mem_from_phys on Android HIDL RKNN API!");
   return nullptr;
 }
 
 rknn_tensor_mem* rknn_create_mem_from_fd(rknn_context ctx, int32_t fd, void *virt_addr, uint32_t size, int32_t offset) {
-  NNAPI_LOG("No Implement rknn_create_mem_from_fd on Android HIDL RKNN API!");
-  return nullptr;
+  if (ctx == 0) {
+    return NULL;
+  }
+
+  rknn_tensor_mem* mem = (rknn_tensor_mem*)malloc(sizeof(rknn_tensor_mem));
+  memset(mem, 0, sizeof(rknn_tensor_mem));
+  mem->virt_addr = virt_addr;
+  mem->phys_addr = -1;
+  mem->fd        = fd;
+  mem->offset    = offset;
+  mem->size      = size;
+
+  return mem;
 }
 
 rknn_tensor_mem* rknn_create_mem_from_mb_blk(rknn_context ctx, void *mb_blk, int32_t offset) {
+  UNUSED(ctx);
+  UNUSED(mb_blk);
+  UNUSED(offset);
+
   NNAPI_LOG("No Implement rknn_create_mem_from_mb_blk on Android HIDL RKNN API!");
   return nullptr;
 }
 
-rknn_tensor_mem* rknn_create_mem(rknn_context ctx, uint32_t size) {
-  NNAPI_LOG("No Implement rknn_create_mem on Android HIDL RKNN API!");
-  return nullptr;
+rknn_tensor_mem* rknn_create_mem(rknn_context context, uint32_t size) {
+  _rknn_context *_ctx = (_rknn_context *)context;
+  rknn_tensor_mem *mem = nullptr;
+
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0) {
+    return nullptr;
+  }
+
+  const NnApi *_nnapi = NnApiImplementation();
+
+  mem = _nnapi->ARKNN_create_mem(_ctx->hal, _ctx->rknn_ctx, size);
+  return mem;
 }
 
-int rknn_destory_mem(rknn_context ctx, rknn_tensor_mem *mem) {
-  NNAPI_LOG("No Implement rknn_destory_mem on Android HIDL RKNN API!");
-  return RKNN_ERR_FAIL;
+int rknn_destory_mem(rknn_context context, rknn_tensor_mem *mem) {
+  _rknn_context *_ctx = (_rknn_context *)context;
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0 || (mem == NULL)) {
+    return RKNN_ERR_CTX_INVALID;
+  }
+
+  const NnApi *_nnapi = NnApiImplementation();
+
+  _nnapi->ARKNN_destory_mem(_ctx->hal, _ctx->rknn_ctx, mem);
+
+  free(mem);
+
+  return 0;
 }
 
 int rknn_set_weight_mem(rknn_context ctx, rknn_tensor_mem *mem) {
+  UNUSED(ctx);
+  UNUSED(mem);
   NNAPI_LOG("No Implement rknn_set_weight_mem on Android HIDL RKNN API!");
   return RKNN_ERR_FAIL;
 }
 
 int rknn_set_internal_mem(rknn_context ctx, rknn_tensor_mem *mem) {
+  UNUSED(ctx);
+  UNUSED(mem);
   NNAPI_LOG("No Implement rknn_set_internal_mem on Android HIDL RKNN API!");
   return RKNN_ERR_FAIL;
 }
 
-int rknn_set_io_mem(rknn_context ctx, rknn_tensor_mem *mem, rknn_tensor_attr *attr) {
-  NNAPI_LOG("No Implement rknn_set_io_mem on Android HIDL RKNN API!");
-  return RKNN_ERR_FAIL;
+int rknn_set_io_mem(rknn_context context, rknn_tensor_mem *mem, rknn_tensor_attr *attr) {
+  _rknn_context *_ctx = (_rknn_context *)context;
+  if (_ctx == NULL || _ctx->hal == NULL || _ctx->rknn_ctx == 0 || (mem == NULL) || (attr == NULL)) {
+    return RKNN_ERR_CTX_INVALID;
+  }
+
+  if (mem->fd < 0) {
+    NNAPI_LOG("rknn_set_io_mem not support rknn_tensor_mem::fd < 0 on Android HIDL RKNN API!");
+    return RKNN_ERR_PARAM_INVALID;
+  }
+
+  const NnApi *_nnapi = NnApiImplementation();
+
+  int ret = _nnapi->ARKNN_set_io_mem(_ctx->hal, _ctx->rknn_ctx, mem, attr);
+
+  return ret;
 }

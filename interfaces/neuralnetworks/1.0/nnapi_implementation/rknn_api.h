@@ -253,6 +253,15 @@ typedef struct _rknn_custom_string {
 } rknn_custom_string;
 
 /*
+   The flags of rknn_tensor_mem. 
+*/
+typedef enum _rknn_tensor_mem_flags {
+    RKNN_TENSOR_MEMORY_FLAGS_ALLOC_INSIDE = 1,           /*Used to mark in rknn_destory_mem() whether it is necessary to release the "mem" pointer itself.
+                                                         If the flag RKNN_TENSOR_MEMORY_FLAGS_ALLOC_INSIDE is set, rknn_destory_mem() will call free(mem).*/
+    RKNN_TENSOR_MEMORY_FLAGS_UNKNOWN
+} rknn_tensor_mem_flags;
+
+/*
     the memory information of tensor.
 */
 typedef struct _rknn_tensor_memory {
@@ -453,7 +462,7 @@ int rknn_outputs_release(rknn_context context, uint32_t n_ouputs, rknn_output ou
         uint64_t phys_addr          physical address.
         void *virt_addr             virtual address.
         uint32_t size               the size of tensor buffer.
-    return:
+    return: 
         rknn_tensor_mem             the pointer of tensor memory information.
 */
 rknn_tensor_mem* rknn_create_mem_from_phys(rknn_context ctx, uint64_t phys_addr, void *virt_addr, uint32_t size);

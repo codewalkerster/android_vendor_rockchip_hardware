@@ -8,6 +8,9 @@ LIBRKNNHAL_BRIDGE {
     ARKNN_run;
     ARKNN_outputs_get;
     ARKNN_outputs_release;
+    ARKNN_destory_mem;
+    ARKNN_create_mem;
+    ARKNN_set_io_mem;
   local:
     *;
 };

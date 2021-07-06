@@ -5,6 +5,9 @@
 #include <cutils/properties.h>
 
 #define LOG_TAG "RockchipNN"
+
+#define UNUSED(x) (void)(x)
+
 static bool g_debug_pro = 0;
 
 #define RECORD_TAG() \

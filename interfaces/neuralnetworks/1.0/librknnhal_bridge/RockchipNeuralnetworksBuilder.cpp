@@ -1,4 +1,19 @@
+// Copyright (c) 2021 by Rockchip Electronics Co., Ltd. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include <cutils/properties.h>
+#include <sys/mman.h>
 #include "RockchipNeuralnetworksBuilder.h"
 
 using ::android::hidl::allocator::V1_0::IAllocator;
@@ -50,6 +65,10 @@ static RKNNQueryCmd to_rknn_hal(rknn_query_cmd cmd) {
             return RKNNQueryCmd::RKNN_QUERY_PERF_RUN;
         case RKNN_QUERY_SDK_VERSION:
             return RKNNQueryCmd::RKNN_QUERY_SDK_VERSION;
+        case RKNN_QUERY_MEM_SIZE:
+            return RKNNQueryCmd::RKNN_QUERY_MEM_SIZE;
+        case RKNN_QUERY_CUSTOM_STRING:
+            return RKNNQueryCmd::RKNN_QUERY_CUSTOM_STRING;
         default:
             return RKNNQueryCmd::RKNN_QUERY_CMD_MAX;
     }
@@ -82,6 +101,25 @@ static RKNNTensorFormat to_rknn_hal(rknn_tensor_format fmt) {
         default:
             return RKNNTensorFormat::RKNNTensorFormat_MAX;
     }
+}
+
+static int dma_map(int fd, uint32_t length, int prot, int flags, off_t offset, void **ptr) {
+    static uint32_t pagesize_mask = 0;
+    if (ptr == NULL)
+    return -EINVAL;
+
+    if (!pagesize_mask)
+        pagesize_mask = sysconf(_SC_PAGESIZE) - 1;
+
+    offset = offset & (~pagesize_mask);
+
+    *ptr = mmap(NULL, length, prot, flags, fd, offset);
+    if (*ptr == MAP_FAILED) {
+        ALOGE("fail to mmap(fd = %d), error:%s", fd, strerror(errno));
+        *ptr = NULL;
+        return -errno;
+    }
+    return 0;
 }
 
 namespace rockchip {
@@ -130,10 +168,8 @@ int RockchipNeuralnetworksBuilder::rknn_init(rknn_context* context, void *pData,
                 }
             });
             if (!ret.isOk()) {
-                ALOGE("Ret Failed!");
+                ALOGE("rknn_init Failed!");
                 ret_code = -1;
-            } else {
-                ALOGE("Ret Successfully!");
             }
         }
     });
@@ -171,6 +207,7 @@ int RockchipNeuralnetworksBuilder::rknn_query(rknn_context context, rknn_query_c
             pMem->update();
             memcpy(pMem->getPointer(), info, size);
             pMem->commit();
+            
             _kRKNNInterface->rknnQuery(_rknn_context->context, to_rknn_hal(cmd), mem, size);
             memcpy(info, pMem->getPointer(), size);
         }
@@ -319,6 +356,153 @@ int RockchipNeuralnetworksBuilder::rknn_outputs_release(rknn_context context, ui
         if (outputs[i].is_prealloc != 1) {
             free(outputs[i].buf);
         }
+    }
+    return 0;
+}
+
+int RockchipNeuralnetworksBuilder::rknn_destory_mem(rknn_context context, rknn_tensor_mem *mem) {
+    CHECK();
+    _RKNNContext *_rknn_context = (_RKNNContext *)context;
+    RKNNTensorMemory bridge_mem;
+
+    bridge_mem.virt_addr = (uint64_t)0;
+    bridge_mem.phys_addr = mem->phys_addr;
+    bridge_mem.offset = mem->offset;
+    bridge_mem.size = mem->size;
+    bridge_mem.flags = mem->flags;
+    bridge_mem.priv_data = (uint64_t)mem->priv_data;
+    bridge_mem.bridge_uuid = 0;
+
+    std::map<uint64_t, void *>::iterator iter;  
+    for(iter = m_TempTensorMap.begin(); iter != m_TempTensorMap.end(); iter++) {
+        if (mem == (rknn_tensor_mem *)iter->second) {
+            bridge_mem.bridge_uuid = iter->first;
+            // #ifdef __arm__
+            // printf("rknn_destory_mem:uuid=0x%llx, mem=%p\n", bridge_mem.bridge_uuid, mem);
+            // #else
+            // printf("rknn_destory_mem:uuid=0x%lx, mem=%p\n", bridge_mem.bridge_uuid, mem);
+            // #endif
+            break;
+        }
+    }
+
+    if (bridge_mem.bridge_uuid != 0) {      
+        Return<ErrorStatus> ret = _kRKNNInterface->rknnDestoryMemory(_rknn_context->context, bridge_mem);
+        if (ret.isOk()) {
+            return 0;
+        } else {
+            ALOGE("rknn_destory_mem error!");
+            return -1;
+        }
+    }
+
+    if (mem->fd >= 0) {
+        close(mem->fd);
+    }
+    
+    return 0;
+}
+
+rknn_tensor_mem* RockchipNeuralnetworksBuilder::rknn_create_mem(rknn_context context, uint32_t size) {
+    CHECK();
+    _RKNNContext *_rknn_context = (_RKNNContext *)context;
+    rknn_tensor_mem* mem= nullptr;
+
+    Return<void> ret = _kRKNNInterface->rknnCreateMem(_rknn_context->context, size, [&](ErrorStatus status, RKNNTensorMemory respose_mem) {
+        if ((int)status == RKNN_SUCC) {
+            mem = (rknn_tensor_mem *)malloc(sizeof(rknn_tensor_mem));
+            mem->virt_addr = nullptr;
+            mem->phys_addr = respose_mem.phys_addr;
+            mem->offset = respose_mem.offset;
+            mem->size = respose_mem.size;
+            mem->flags = respose_mem.flags;
+            mem->priv_data = (void *)respose_mem.priv_data;
+
+            const native_handle_t* hnd = respose_mem.bufferHdl.getNativeHandle();
+            mem->fd = dup(hnd->data[0]);
+
+            if (dma_map(mem->fd, mem->size, PROT_READ | PROT_WRITE, MAP_SHARED, 0, &mem->virt_addr) < 0) {
+                ALOGE("rknn_create_mem: dma_map failed!");
+                free(mem);
+                mem = nullptr;
+            }
+
+            m_TempTensorMap.insert(pair<uint64_t, void*>(respose_mem.bridge_uuid, mem));
+
+            // #ifdef __arm__
+            // printf("rknn_create_mem:uuid=0x%llx, mem=%p\n", respose_mem.bridge_uuid, mem);
+            // #else
+            // printf("rknn_create_mem:uuid=0x%lx, mem=%p\n", respose_mem.bridge_uuid, mem);
+            // #endif
+
+        } else {
+            ALOGE("rknn_create_mem failed!");
+        }
+    });
+
+    if (ret.isOk()) {
+        return mem;
+    } else {
+        ALOGE("rknn_create_mem failed!");
+    }
+
+    return mem;
+}
+
+int RockchipNeuralnetworksBuilder::rknn_set_io_mem(rknn_context context, rknn_tensor_mem *mem, rknn_tensor_attr *attr) {
+    CHECK();
+    _RKNNContext *_rknn_context = (_RKNNContext *)context;
+    android::hardware::hidl_handle handle;
+
+    if (sizeof(rknn_tensor_attr) != sizeof(RKNNTensorAttr)) {
+        ALOGE("sizeof(rknn_tensor_attr) != sizeof(::rockchip::hardware::neuralnetworks::V1_0::RKNNTensorAttr): %ld vs %ld\n",
+                sizeof(rknn_tensor_attr), sizeof(::rockchip::hardware::neuralnetworks::V1_0::RKNNTensorAttr));
+        return -1;
+    }
+
+    RKNNTensorMemory bridge_mem;
+    RKNNTensorAttr   bridge_attr;
+
+    memcpy(&bridge_attr, attr, sizeof(RKNNTensorAttr));
+
+    bridge_mem.virt_addr = (uint64_t)0;
+    bridge_mem.phys_addr = mem->phys_addr;
+    bridge_mem.offset = mem->offset;
+    bridge_mem.size = mem->size;
+    bridge_mem.flags = mem->flags;
+    bridge_mem.priv_data = (uint64_t)mem->priv_data;
+    bridge_mem.bridge_uuid = 0;
+
+    std::map<uint64_t, void *>::iterator iter;  
+    for(iter = m_TempTensorMap.begin(); iter != m_TempTensorMap.end(); iter++) {
+        if (mem == (rknn_tensor_mem *)iter->second) {
+            bridge_mem.bridge_uuid = iter->first;
+            // #ifdef __arm__
+            // printf("rknn_set_io_mem:uuid=0x%llx, mem=%p\n", bridge_mem.bridge_uuid, mem);
+            // #else
+            // printf("rknn_set_io_mem:uuid=0x%lx, mem=%p\n", bridge_mem.bridge_uuid, mem);
+            // #endif
+            break;
+        }
+    }
+
+    if (bridge_mem.bridge_uuid == 0) {
+        native_handle_t* nativeHandle = native_handle_create(/*numFd*/ 1, 0);
+        if(mem->fd >= 0){
+            nativeHandle->data[0] = dup(mem->fd);            
+            handle.setTo(nativeHandle, /*shouldOwn=*/true);
+            bridge_mem.bufferHdl = handle;
+        } else {
+            native_handle_delete(nativeHandle);
+        }
+    }
+
+    Return<ErrorStatus> ret = _kRKNNInterface->rknnSetIOMem(_rknn_context->context, bridge_mem, bridge_attr);
+    if (ret.isOk()) {
+        return 0;
+    } else {
+        ALOGE("rknn_set_io_mem error:%s", ret.description().c_str());
+        return -1;
     }
     return 0;
 }
