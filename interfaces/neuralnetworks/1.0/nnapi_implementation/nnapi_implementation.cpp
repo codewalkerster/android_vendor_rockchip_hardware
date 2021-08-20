@@ -25,7 +25,7 @@
 #include <sys/system_properties.h>
 
 #include "NeuralNetworksTypes.h"
-#include "rknn_api.h"
+#include "../default/prebuilts/librknnrt/include/rknn_api.h"
 
 #define TAG "RKNN_API"
 #define NNAPI_LOG(...) __android_log_print(ANDROID_LOG_ERROR,TAG ,__VA_ARGS__)

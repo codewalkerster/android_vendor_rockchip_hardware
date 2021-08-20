@@ -17,7 +17,7 @@
 
 #include <stdint.h>
 
-#include "rknn_api.h"
+#include "../default/prebuilts/librknnrt/include/rknn_api.h"
 
 typedef struct ARKNNHAL ARKNNHAL;
 
