@@ -1,6 +1,6 @@
 /****************************************************************************
 *
-*    Copyright (c) 2017 - 2021 by Rockchip Corp.  All rights reserved.
+*    Copyright (c) 2017 - 2022 by Rockchip Corp.  All rights reserved.
 *
 *    The material in this file is confidential and contains trade secrets
 *    of Rockchip Corporation. This is proprietary information owned by
@@ -46,6 +46,15 @@ extern "C" {
 
 /* allocate all memory in outside, includes weight/internal/inputs/outputs */
 #define RKNN_FLAG_MEM_ALLOC_OUTSIDE             0x00000010
+
+/* weight sharing with the same network structure */
+#define RKNN_FLAG_SHARE_WEIGHT_MEM              0x00000020
+
+/* send fence fd from outside */
+#define RKNN_FLAG_FENCE_IN_OUTSIDE              0x00000040
+
+/* get fence fd from inside */
+#define RKNN_FLAG_FENCE_OUT_OUTSIDE             0x00000080
 
 /*
     Error code returned by the RKNN API.
@@ -117,6 +126,7 @@ typedef enum _rknn_tensor_type {
     RKNN_TENSOR_INT32,                                  /* data type is int32. */
     RKNN_TENSOR_UINT32,                                 /* data type is uint32. */
     RKNN_TENSOR_INT64,                                  /* data type is int64. */
+    RKNN_TENSOR_BOOL,
 
     RKNN_TENSOR_TYPE_MAX
 } rknn_tensor_type;
@@ -133,6 +143,7 @@ inline const char* get_type_string(rknn_tensor_type type)
     case RKNN_TENSOR_INT32: return "INT32";
     case RKNN_TENSOR_UINT32: return "UINT32";
     case RKNN_TENSOR_INT64: return "UINT64";
+    case RKNN_TENSOR_BOOL: return "BOOL";
     default: return "UNKNOW";
     }
 }
@@ -165,9 +176,24 @@ typedef enum _rknn_tensor_format {
     RKNN_TENSOR_NCHW = 0,                               /* data format is NCHW. */
     RKNN_TENSOR_NHWC,                                   /* data format is NHWC. */
     RKNN_TENSOR_NC1HWC2,                                /* data format is NC1HWC2. */
+    RKNN_TENSOR_UNDEFINED,
 
     RKNN_TENSOR_FORMAT_MAX
 } rknn_tensor_format;
+
+/*
+    the mode of running on target NPU core.
+*/
+typedef enum _rknn_core_mask {
+    RKNN_NPU_CORE_AUTO = 0,                              /* default, run on NPU core randomly. */
+    RKNN_NPU_CORE_0 = 1,                                 /* run on NPU core 0. */
+    RKNN_NPU_CORE_1 = 2,                                 /* run on NPU core 1. */
+    RKNN_NPU_CORE_2 = 4,                                 /* run on NPU core 2. */
+    RKNN_NPU_CORE_0_1 = 3,                               /* run on NPU core 1 and core 2. */
+    RKNN_NPU_CORE_0_1_2 = 7,                             /* run on NPU core 1 and core 2 and core 3. */
+
+    RKNN_NPU_CORE_UNDEFINED,
+} rknn_core_mask;
 
 inline const char* get_format_string(rknn_tensor_format fmt)
 {
@@ -175,6 +201,7 @@ inline const char* get_format_string(rknn_tensor_format fmt)
     case RKNN_TENSOR_NCHW: return "NCHW";
     case RKNN_TENSOR_NHWC: return "NHWC";
     case RKNN_TENSOR_NC1HWC2: return "NC1HWC2";
+    case RKNN_TENSOR_UNDEFINED: return "UNDEFINED";
     default: return "UNKNOW";
     }
 }
@@ -317,8 +344,8 @@ typedef struct _rknn_output {
     the extend information for rknn_init.
 */
 typedef struct _rknn_init_extend {
-    int32_t core_id;                                    /* npu core id */
-    uint8_t reserved[128];                              /* reserved */
+    rknn_context ctx;                                    /* rknn context */
+    uint8_t reserved[128];                               /* reserved */
 } rknn_init_extend;
 
 /*
@@ -328,6 +355,7 @@ typedef struct _rknn_run_extend {
     uint64_t frame_id;                                  /* output parameter, indicate current frame id of run. */
     int32_t non_block;                                  /* block flag of run, 0 is block else 1 is non block */
     int32_t timeout_ms;                                 /* timeout for block mode, in milliseconds */
+    int32_t fence_fd;                                   /* fence fd from other unit */
 } rknn_run_extend;
 
 /*
@@ -354,6 +382,17 @@ typedef struct _rknn_output_extend {
 */
 int rknn_init(rknn_context* context, void* model, uint32_t size, uint32_t flag, rknn_init_extend* extend);
 
+/*  rknn_dup_context
+
+    initial the context and load the rknn model.
+
+    input:
+        rknn_context* context_in       the pointer of context in handle.
+        rknn_context* context_out      the pointer of context out handle.
+    return:
+        int                         error code.
+*/
+int rknn_dup_context(rknn_context* context_in, rknn_context* context_out);
 
 /*  rknn_destroy
 
@@ -396,6 +435,24 @@ int rknn_query(rknn_context context, rknn_query_cmd cmd, void* info, uint32_t si
 */
 int rknn_inputs_set(rknn_context context, uint32_t n_inputs, rknn_input inputs[]);
 
+/*  rknn_set_core_mask
+
+    set rknn core mask.(only supported on RK3588 now)
+
+    RKNN_NPU_CORE_AUTO: auto mode, default value
+    RKNN_NPU_CORE_0: core 0 mode
+    RKNN_NPU_CORE_1: core 1 mode
+    RKNN_NPU_CORE_2: core 2 mode
+    RKNN_NPU_CORE_0_1: combine core 0/1 mode
+    RKNN_NPU_CORE_0_1_2: combine core 0/1/2 mode
+
+    input:
+        rknn_context context        the handle of context.
+        rknn_core_mask core_mask    the core mask.
+    return:
+        int                         error code.
+*/
+int rknn_set_core_mask(rknn_context context, rknn_core_mask core_mask);
 
 /*  rknn_run
 
